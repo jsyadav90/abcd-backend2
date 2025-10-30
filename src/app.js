@@ -19,14 +19,14 @@ app.get("/", (req, res) => {
 });
 
 //Routes import
-// import authRoutes from "./routes/auth.routes.js";
+import authRoutes from './routers/auth.routes.js'
 import branchRoutes from './routers/branch.routes.js'
 import groupRoutes from './routers/group.routes.js'
 import userRoutes from "./routers/user.routes.js"
 
 
 // Router declaration
-// app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/branches", branchRoutes)
 app.use("/api/v1/group", groupRoutes)
 app.use("/api/v1/users", userRoutes)
