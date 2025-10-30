@@ -6,7 +6,8 @@ import { registerUser,
   updateUser,
   toggleUserStatus,
   deleteUser,
-  getUsersByBranch, } from "../controllers/user.controllers.js";
+  // getUsersByBranch,
+ } from "../controllers/user.controllers.js";
 import {upload} from "../middlewares/multer.middleware.js"
 
 const router = Router();
@@ -18,6 +19,6 @@ router.route("/:id").get(upload.none(), getUserById)
 router.route("/:id").put(upload.none(), updateUser)
 router.route("/:id/status").patch(upload.none(), toggleUserStatus)
 router.route("/:id").delete(upload.none(), deleteUser)
-router.route("/branch/:branchId").get(upload.none(), getUsersByBranch)
+// router.route("/branch/:branchId").get(upload.none(), getUsersByBranch)
 
 export default router;
