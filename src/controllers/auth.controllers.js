@@ -2,62 +2,116 @@ import { User } from "../models/user.model.js";
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
 
+
 export const loginUser = async (req, res) => {
   try {
     const { username, password, deviceId } = req.body;
-    if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+    if (!username || !password)
+      return res.status(400).json({ message: "Username and password required" });
 
     const user = await User.findOne({ username: username.toLowerCase() })
-  .populate("role", "roleName") // only roleName field
-  .populate("branch", "branchName") // only branchName field
-  .select("+password");
+      .populate("role", "roleName")
+      .populate("branch", "branchName")
+      .select("+password");
+
     if (!user) return res.status(404).json({ message: "User not found" });
     if (!user.isActive) return res.status(403).json({ message: "User account inactive" });
     if (!user.canLogin) return res.status(403).json({ message: "User cannot log in" });
 
-    // Lockout check
-    if (user.lockUntil && user.lockUntil > new Date()) {
-      return res.status(403).json({ message: "Account locked due to failed login attempts. Try later." });
+    // 🚫 Permanent lock check
+    if (user.isPermanentlyLocked) {
+      return res.status(403).json({
+        message:
+          "Account permanently locked. Please contact Administrator or Enterprise Admin.",
+      });
     }
 
-    //! password match 
-   const isMatch = await user.comparePassword(password);
-if (!isMatch) {
-  user.failedLoginAttempts += 1;
-  if (user.failedLoginAttempts >= 5) {
-    user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
-  }
-  await user.save();
-  return res.status(401).json({ message: "Invalid credentials too" });
-}
+    // 🚫 Temporary lock check
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const remainingSec = Math.ceil((user.lockUntil - new Date()) / 1000);
+      const remainingMin = Math.ceil(remainingSec / 60);
+      return res.status(403).json({
+        message: `Account temporarily locked. Try again in ${remainingMin} minute(s).`,
+      });
+    }
 
-    //! Reset failed attempts
+    // ✅ Password match check
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+
+      // ⚙️ Lock system: 3 wrong attempts trigger next level
+      const attemptsLeft = 3 - user.failedLoginAttempts;
+
+      if (user.failedLoginAttempts >= 3) {
+        user.lockLevel += 1;
+        user.failedLoginAttempts = 0; // reset after lock trigger
+        let lockDuration = 0;
+        let lockMsg = "";
+
+        switch (user.lockLevel) {
+          case 1:
+            lockDuration = 1; // minutes
+            lockMsg = "Account locked for 1 minute due to multiple failed attempts.";
+            break;
+          case 2:
+            lockDuration = 3;
+            lockMsg = "Account locked for 3 minutes due to multiple failed attempts.";
+            break;
+          case 3:
+            lockDuration = 5;
+            lockMsg = "Account locked for 5 minutes due to multiple failed attempts.";
+            break;
+          case 4:
+          default:
+            user.isPermanentlyLocked = true;
+            lockMsg =
+              "Account permanently locked. Please contact Administrator or Enterprise Admin.";
+            break;
+        }
+
+        if (!user.isPermanentlyLocked)
+          user.lockUntil = new Date(Date.now() + lockDuration * 60 * 1000);
+
+        await user.save();
+        return res.status(403).json({ message: lockMsg });
+      }
+
+      await user.save();
+      return res.status(401).json({
+        message: `Invalid credentials. You have ${attemptsLeft} attempt(s) left before temporary lock.`,
+      });
+    }
+
+    // ✅ Successful login: reset all lock info
     user.failedLoginAttempts = 0;
+    user.lockLevel = 0;
     user.lockUntil = null;
+    user.isPermanentlyLocked = false;
 
+    // 🔐 Device handling (same as your original)
     const currentDeviceId = deviceId || "manual-" + uuidv4();
     const ipAddress = req.ip;
     const userAgent = req.headers["user-agent"] || "unknown";
 
     let device = user.loggedInDevices.find(
-      (d) => d.deviceId === currentDeviceId || (d.ipAddress === ipAddress && d.userAgent === userAgent)
+      (d) =>
+        d.deviceId === currentDeviceId ||
+        (d.ipAddress === ipAddress && d.userAgent === userAgent)
     );
 
     if (device) {
       const lastSession = device.loginHistory[device.loginHistory.length - 1];
       if (lastSession && !lastSession.logoutAt) {
-        // Already logged in → reuse refresh token
         return res.status(200).json({
           success: true,
           message: "Already logged in on this device",
           deviceId: device.deviceId,
         });
       }
-      // New session on same device
       device.loginHistory.push({ loginAt: new Date() });
       device.loginCount += 1;
     } else {
-      // New device check
       if (user.loggedInDevices.length >= user.maxAllowedDevices) {
         return res.status(403).json({
           message: `Maximum devices reached (${user.maxAllowedDevices}). Logout another device first.`,
@@ -77,31 +131,32 @@ if (!isMatch) {
     user.isLoggedIn = true;
     user.lastLogin = new Date();
 
-    // Generate tokens
+    // 🎟️ Generate tokens
     const accessToken = user.generateAccessToken();
-    const refreshToken = jwt.sign({ id: user._id, deviceId: device.deviceId }, process.env.REFRESH_TOKEN_KEY, {
-      expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
-    });
-    device.refreshToken = refreshToken;
+    const refreshToken = jwt.sign(
+      { id: user._id, deviceId: device.deviceId },
+      process.env.REFRESH_TOKEN_KEY,
+      { expiresIn: process.env.REFRESH_TOKEN_EXPIRY }
+    );
 
+    device.refreshToken = refreshToken;
     await user.save();
 
-    // Set secure HttpOnly cookies
+    // 🍪 Set cookies
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 1000 * 60 * 15, // 15 minutes
+      maxAge: 1000 * 60 * 15,
     });
-
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Login successful",
       deviceId: device.deviceId,
@@ -116,9 +171,12 @@ if (!isMatch) {
     });
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };
+
+
+
 
 
 // Logout 

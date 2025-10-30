@@ -22,7 +22,7 @@ const userSchema = new Schema(
       type: String,
       trim: true,
       lowercase: true,
-     sparse: true, 
+      sparse: true,
     },
     password: {
       type: String,
@@ -44,7 +44,7 @@ const userSchema = new Schema(
       // ref: "UserRole",
       type: String,
       required: true,
-      default : "user"
+      default: "user",
     },
     branch: {
       // type: Schema.Types.ObjectId,
@@ -84,6 +84,29 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    lockLevel: {
+      type: Number,
+      default: 0, // 0=no lock, 1=first, 2=second, 3=third, 4=permanent
+    },
+    lockUntil: {
+      type: Date,
+      default: null,
+    },
+    isPermanentlyLocked: {
+      type: Boolean,
+      default: false,
+    },
 
     loggedInDevices: [
       {
@@ -108,7 +131,6 @@ const userSchema = new Schema(
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
     lastLogin: { type: Date },
-    
   },
   {
     timestamps: true,
@@ -134,7 +156,6 @@ userSchema.pre("validate", function (next) {
     }
   }
   next();
-
 });
 
 //////////////////////////////
