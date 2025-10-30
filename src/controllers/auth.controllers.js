@@ -1,7 +1,12 @@
-import { User } from "../models/user.model.js";
-import { v4 as uuidv4 } from "uuid";
-import jwt from "jsonwebtoken";
 
+/* ============================================================
+   🔐 LOGIN USER
+============================================================ */
+import { User } from "../models/user.model.js";
+import { UserLogin } from "../models/userLogin.model.js";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import { v4 as uuidv4 } from "uuid";
 
 export const loginUser = async (req, res) => {
   try {
@@ -9,17 +14,21 @@ export const loginUser = async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ message: "Username and password required" });
 
-    const user = await User.findOne({ username: username.toLowerCase() })
-      .populate("role", "roleName")
-      .populate("branch", "branchName")
-      .select("+password");
+    // 🔐 Find login credentials first
+    const login = await UserLogin.findOne({ username: username.toLowerCase() })
+      .select("+password")
+      .populate("user");
 
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!login)
+      return res.status(404).json({ message: "User not found" });
+
+    const user = login.user;
+    if (!user) return res.status(404).json({ message: "User details not found" });
     if (!user.isActive) return res.status(403).json({ message: "User account inactive" });
     if (!user.canLogin) return res.status(403).json({ message: "User cannot log in" });
 
     // 🚫 Permanent lock check
-    if (user.isPermanentlyLocked) {
+    if (login.isPermanentlyLocked) {
       return res.status(403).json({
         message:
           "Account permanently locked. Please contact Administrator or Enterprise Admin.",
@@ -27,8 +36,8 @@ export const loginUser = async (req, res) => {
     }
 
     // 🚫 Temporary lock check
-    if (user.lockUntil && user.lockUntil > new Date()) {
-      const remainingSec = Math.ceil((user.lockUntil - new Date()) / 1000);
+    if (login.lockUntil && login.lockUntil > new Date()) {
+      const remainingSec = Math.ceil((login.lockUntil - new Date()) / 1000);
       const remainingMin = Math.ceil(remainingSec / 60);
       return res.status(403).json({
         message: `Account temporarily locked. Try again in ${remainingMin} minute(s).`,
@@ -36,22 +45,22 @@ export const loginUser = async (req, res) => {
     }
 
     // ✅ Password match check
-    const isMatch = await user.comparePassword(password);
+    const isMatch = await bcrypt.compare(password, login.password);
     if (!isMatch) {
-      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      login.failedLoginAttempts = (login.failedLoginAttempts || 0) + 1;
 
-      // ⚙️ Lock system: 3 wrong attempts trigger next level
-      const attemptsLeft = 3 - user.failedLoginAttempts;
+      // ⚙️ Lock system: every 3 wrong attempts → escalate lock
+      const attemptsLeft = 3 - login.failedLoginAttempts;
 
-      if (user.failedLoginAttempts >= 3) {
-        user.lockLevel += 1;
-        user.failedLoginAttempts = 0; // reset after lock trigger
+      if (login.failedLoginAttempts >= 3) {
+        login.lockLevel += 1;
+        login.failedLoginAttempts = 0; // reset after lock trigger
         let lockDuration = 0;
         let lockMsg = "";
 
-        switch (user.lockLevel) {
+        switch (login.lockLevel) {
           case 1:
-            lockDuration = 1; // minutes
+            lockDuration = 1;
             lockMsg = "Account locked for 1 minute due to multiple failed attempts.";
             break;
           case 2:
@@ -64,37 +73,37 @@ export const loginUser = async (req, res) => {
             break;
           case 4:
           default:
-            user.isPermanentlyLocked = true;
+            login.isPermanentlyLocked = true;
             lockMsg =
               "Account permanently locked. Please contact Administrator or Enterprise Admin.";
             break;
         }
 
-        if (!user.isPermanentlyLocked)
-          user.lockUntil = new Date(Date.now() + lockDuration * 60 * 1000);
+        if (!login.isPermanentlyLocked)
+          login.lockUntil = new Date(Date.now() + lockDuration * 60 * 1000);
 
-        await user.save();
+        await login.save();
         return res.status(403).json({ message: lockMsg });
       }
 
-      await user.save();
+      await login.save();
       return res.status(401).json({
-        message: `Invalid credentials. You have ${attemptsLeft} attempt(s) left before temporary lock.`,
+        message: `Invalid credentials. You have ${attemptsLeft} attempt(s) left before lock.`,
       });
     }
 
     // ✅ Successful login: reset all lock info
-    user.failedLoginAttempts = 0;
-    user.lockLevel = 0;
-    user.lockUntil = null;
-    user.isPermanentlyLocked = false;
+    login.failedLoginAttempts = 0;
+    login.lockLevel = 0;
+    login.lockUntil = null;
+    login.isPermanentlyLocked = false;
 
-    // 🔐 Device handling (same as your original)
+    // 🔐 Device handling
     const currentDeviceId = deviceId || "manual-" + uuidv4();
     const ipAddress = req.ip;
     const userAgent = req.headers["user-agent"] || "unknown";
 
-    let device = user.loggedInDevices.find(
+    let device = login.loggedInDevices.find(
       (d) =>
         d.deviceId === currentDeviceId ||
         (d.ipAddress === ipAddress && d.userAgent === userAgent)
@@ -112,9 +121,9 @@ export const loginUser = async (req, res) => {
       device.loginHistory.push({ loginAt: new Date() });
       device.loginCount += 1;
     } else {
-      if (user.loggedInDevices.length >= user.maxAllowedDevices) {
+      if (login.loggedInDevices.length >= login.maxAllowedDevices) {
         return res.status(403).json({
-          message: `Maximum devices reached (${user.maxAllowedDevices}). Logout another device first.`,
+          message: `Maximum devices reached (${login.maxAllowedDevices}). Logout another device first.`,
         });
       }
       device = {
@@ -125,14 +134,24 @@ export const loginUser = async (req, res) => {
         loginCount: 1,
         refreshToken: null,
       };
-      user.loggedInDevices.push(device);
+      login.loggedInDevices.push(device);
     }
 
-    user.isLoggedIn = true;
+    login.isLoggedIn = true;
     user.lastLogin = new Date();
 
     // 🎟️ Generate tokens
-    const accessToken = user.generateAccessToken();
+    const accessToken = jwt.sign(
+      {
+        id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        branch: user.branch,
+      },
+      process.env.ACCESS_TOKEN_KEY,
+      { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
+    );
+
     const refreshToken = jwt.sign(
       { id: user._id, deviceId: device.deviceId },
       process.env.REFRESH_TOKEN_KEY,
@@ -140,9 +159,9 @@ export const loginUser = async (req, res) => {
     );
 
     device.refreshToken = refreshToken;
+    await login.save();
     await user.save();
 
-    // 🍪 Set cookies
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -163,8 +182,8 @@ export const loginUser = async (req, res) => {
       user: {
         id: user._id,
         fullName: user.fullName,
-        username: user.username,
-        role: user.role.roleName,
+        username: login.username,
+        role: user.role,
         branch: user.branch,
         department: user.department,
       },
@@ -176,26 +195,26 @@ export const loginUser = async (req, res) => {
 };
 
 
-
-
-
-// Logout 
-
+/* ============================================================
+   🚪 LOGOUT USER
+============================================================ */
 export const logoutUser = async (req, res) => {
   try {
-    const { userId, deviceId } = req.body;
+    const { userId, username, deviceId } = req.body;
+    if ((!userId && !username) || !deviceId)
+      return res.status(400).json({ message: "userId/username and deviceId required" });
 
-    if (!userId || !deviceId)
-      return res.status(400).json({ message: "userId and deviceId required" });
+    const login = await UserLogin.findOne(
+      userId ? { user: userId } : { username: username.toLowerCase() }
+    );
 
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!login)
+      return res.status(404).json({ message: "User login record not found" });
 
-    const device = user.loggedInDevices.find((d) => d.deviceId === deviceId);
+    const device = login.loggedInDevices.find((d) => d.deviceId === deviceId);
     if (!device)
       return res.status(404).json({ message: "Device not found" });
 
-    // ✅ Mark last session logout
     if (device.loginHistory?.length) {
       const last = device.loginHistory[device.loginHistory.length - 1];
       if (!last.logoutAt) last.logoutAt = new Date();
@@ -203,23 +222,19 @@ export const logoutUser = async (req, res) => {
 
     device.refreshToken = null;
 
-    // ✅ Check if any active session left
-    const hasActive = user.loggedInDevices.some((d) =>
+    const hasActive = login.loggedInDevices.some((d) =>
       d.loginHistory?.some((s) => !s.logoutAt)
     );
-    user.isLoggedIn = hasActive;
+    login.isLoggedIn = hasActive;
 
-    await user.save({ validateBeforeSave: false });
+    await login.save({ validateBeforeSave: false });
 
-    // ✅ Clear cookies properly
     res.clearCookie("accessToken");
     res.clearCookie("refreshToken");
 
-    res.status(200).json({ success: true, message: "Logout successful" });
+    return res.status(200).json({ success: true, message: "Logout successful" });
   } catch (error) {
     console.error("Logout error:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };
-
-
