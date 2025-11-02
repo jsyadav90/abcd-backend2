@@ -36,15 +36,26 @@ const userSchema = new Schema(
       match: [/^[0-9+\-()\s]*$/, "Invalid phone number format"],
     },
     role: {
-      type: mongoose.Schema.Types.ObjectId, 
+      type: mongoose.Schema.Types.ObjectId,
       ref: "UserRole",
       required: true,
-      default: "user",
+      // default: "user",
     },
     branch: {
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Branch" ,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Branch",
       required: true,
+    },
+    assignedBranches: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Branch",
+      },
+    ],
+    reportingTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null, // optional if top-level (like Enterprise Admin)
     },
     department: {
       type: String,
@@ -81,5 +92,18 @@ const userSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// at bottom, after userSchema definition (but before export)
+userSchema.virtual("branchAssignmentLogs", {
+  ref: "BranchAssignmentLog",
+  localField: "_id",
+  foreignField: "user",
+  options: { sort: { createdAt: -1 } }, // newest first
+});
+
+// ensure virtuals are included when converting to JSON if you want them by default
+userSchema.set("toObject", { virtuals: true });
+userSchema.set("toJSON", { virtuals: true });
+
 
 export const User = mongoose.model("User", userSchema);

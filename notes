@@ -1,0 +1,25 @@
+users ID
+Jitu - 69051e5d3c3d2aa633ce1640 (abcd - Super-admin)  
+Sonu - 69051ed13c3d2aa633ce1648 (abcd - administrator - abcd4 / abcd5)
+deepak - 690785c45b7d705cb7967a04 (abcd3 - admin)
+anil - 690520583c3d2aa633ce1668 (abcd4 - admin)
+amit - 690520753c3d2aa633ce1670 (abcd5 - admin)
+sonu2 - 69074bc7a69d6f2999a0dd05 (abcd - administrator - (for test only))
+Mayank - 69051f543c3d2aa633ce1650 (abcd1 - admin)
+Kapil - 690520103c3d2aa633ce1658 (abcd2 - admin)
+
+#Branch ID - 
+abcd  - 69050ab1840690b9ee97684d
+abcd1 - 690239b1c5d249644efee835
+abcd2 - 69023a07c5d249644efee838
+abcd3 - 69023a33c5d249644efee83b
+abcd4 - 69023a73c5d249644efee83e
+abcd5 - 69023a9bc5d249644efee841
+
+
+Role ID - 
+Super-admin - 69051d183c3d2aa633ce162c
+administrator - 69051d303c3d2aa633ce162f
+admin - 69051d483c3d2aa633ce1632
+user - 69051d563c3d2aa633ce1635
+user2 - 69051d5e3c3d2aa633ce1638 (for only test)

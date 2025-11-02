@@ -6,19 +6,30 @@ import { registerUser,
   updateUser,
   toggleUserStatus,
   deleteUser,
-  // getUsersByBranch,
+  restoreUser,
+  getUsersByBranch,
  } from "../controllers/user.controllers.js";
+import {
+  assignBranchesToUser,
+  removeAssignedBranchesFromUser,
+} from "../controllers/assignBranch.controller.js";
+
+ import { assignReportingTo } from "../controllers/assignReporting.controller.js";
 import {upload} from "../middlewares/multer.middleware.js"
 
 const router = Router();
 
 // Only logged-in admins or super admins can create users
-router.route("/register").post(upload.none(), registerUser)
-router.route("/").get(upload.none(), getAllUsers)
-router.route("/:id").get(upload.none(), getUserById)
-router.route("/:id").put(upload.none(), updateUser)
-router.route("/:id/status").patch(upload.none(), toggleUserStatus)
-router.route("/:id").delete(upload.none(), deleteUser)
-// router.route("/branch/:branchId").get(upload.none(), getUsersByBranch)
+router.route("/register").post(upload.none(),authenticateJWT, registerUser)
+router.route("/").get(upload.none(),authenticateJWT, getAllUsers)
+router.route("/:id").get(upload.none(), authenticateJWT, getUserById)
+router.route("/:id").put(upload.none(), authenticateJWT, updateUser)
+router.route("/:id/status").patch(upload.none(),authenticateJWT, toggleUserStatus)
+router.route("/:id").delete(upload.none(),authenticateJWT, deleteUser)
+router.route("/:id").post(upload.none(),authenticateJWT, restoreUser)
+router.route("/assign-branch").post(upload.none(),assignBranchesToUser)
+router.route("/remove-branch").post(upload.none(),removeAssignedBranchesFromUser)
+router.route("/assign-reporting").post(assignReportingTo)
+router.route("/branch/:branchId").get(upload.none(),authenticateJWT, getUsersByBranch)
 
 export default router;
