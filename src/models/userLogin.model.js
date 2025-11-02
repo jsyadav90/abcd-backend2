@@ -76,6 +76,9 @@ userLoginSchema.methods.generateAccessToken = function () {
     {
       id: this.user,
       username: this.username,
+      fullName: this.fullName,
+      role: this.role,
+      branch: this.branch,
     },
     process.env.ACCESS_TOKEN_KEY,
     { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }

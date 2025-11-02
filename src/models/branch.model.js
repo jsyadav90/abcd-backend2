@@ -2,7 +2,7 @@ import mongoose, { Schema } from "mongoose";
 
 const branchSchema = new Schema(
   {
-    group: { type: Schema.Types.ObjectId, ref: "Group", required: true },
+    enterprise: { type: Schema.Types.ObjectId, ref: "Enterprise", required: true },
     
     branchCode: {
       type: String,

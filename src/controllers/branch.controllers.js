@@ -5,7 +5,7 @@ import  {Branch}  from "../models/branch.model.js";
 // CREATE NEW BRANCH
 // ==============================
 export const createBranch = asyncHandler(async (req, res) => {
-  const { group, branchName, branchCode, address, city, phoneNo, email, remarks } = req.body;
+  const { enterprise, branchName, branchCode, address, city, phoneNo, email, remarks } = req.body;
 
   // Check for existing branch
   const existingBranch = await Branch.findOne({ $or: [{ branchCode }, { branchName }] });
@@ -23,7 +23,7 @@ export const createBranch = asyncHandler(async (req, res) => {
 
   // Create new branch
   const newBranch = await Branch.create({
-    group,
+    enterprise,
     branchCode,
     branchName,
     address,

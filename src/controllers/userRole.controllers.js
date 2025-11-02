@@ -12,66 +12,53 @@ import { ALL_PERMISSIONS } from "../config/permissions.js";
  * - Adds createdBy metadata
  * - Logs creation time
  */
-export const createUserRole = async (req, res) => {
-  try {
-    const { roleName, description, permissions = [], enterprise = null } = req.body;
-    const createdBy = req.user?._id || null;
+import { asyncHandler } from "../utils/asyncHandler.js";
 
-    if (!roleName || !roleName.trim()) {
-      return res.status(400).json(new apiError(400, "Role name is required"));
+export const createUserRole = asyncHandler(async (req, res) => {
+  const { roleName, description, permissions = [], enterprise } = req.body;
+
+  if (!roleName?.trim()) throw new apiError(400, "Role name is required");
+
+  // ✅ Prevent duplicate role names
+  const existingRole = await UserRole.findOne({ roleName: roleName.trim() });
+  if (existingRole) throw new apiError(409, "Role name already exists");
+
+  // ✅ Normalize permissions (force correct schema)
+  const normalizedPermissions = permissions.map((p) => {
+    if (typeof p === "string") {
+      return { action: p, granted: true };
+    } else if (p?.action) {
+      return {
+        action: p.action.trim(),
+        granted: p.granted ?? true,
+        modifiedBy: req.user?._id || null,
+        modifiedAt: new Date(),
+      };
+    } else if (typeof p === "object" && Object.keys(p).some((k) => k.match(/^\d+$/))) {
+      // Handle the split-character case
+      return {
+        action: Object.values(p).join(""),
+        granted: true,
+        modifiedBy: req.user?._id || null,
+        modifiedAt: new Date(),
+      };
     }
+    return null;
+  }).filter(Boolean);
 
-    const normalizedRoleName = roleName.trim().toLowerCase();
+  const newRole = await UserRole.create({
+    roleName: roleName.trim(),
+    description,
+    permissions: normalizedPermissions,
+    enterprise: enterprise || null,
+    createdBy: req.user?._id || null,
+  });
 
-    // 🔍 Check if role name already exists (optionally per enterprise)
-    const existingRole = await UserRole.findOne({
-      roleName: normalizedRoleName,
-      enterprise: enterprise || null,
-    });
+  return res
+    .status(201)
+    .json(new apiResponse(201, newRole, "Role created successfully"));
+});
 
-    if (existingRole) {
-      return res.status(400).json(new apiError(400, "Role name already exists"));
-    }
-
-    // 🧠 Prepare permissions structure (with tracking)
-    const formattedPermissions = (permissions || []).map((perm) => ({
-      name: perm,
-      granted: true,
-      modifiedAt: new Date(),
-      modifiedBy: createdBy,
-    }));
-
-    // 🆕 Create new role
-    const newRole = await UserRole.create({
-      roleName: normalizedRoleName,
-      description: description?.trim() || "",
-      permissions: formattedPermissions,
-      enterprise,
-      createdBy,
-      createdAt: new Date(),
-    });
-
-    // 🧹 Clean structured response
-    const formattedResponse = {
-      _id: newRole._id,
-      roleName: newRole.roleName,
-      description: newRole.description,
-      isActive: newRole.isActive,
-      totalPermissions: newRole.permissions?.length || 0,
-      createdBy: createdBy || "System",
-      createdAt: newRole.createdAt,
-    };
-
-    return res
-      .status(201)
-      .json(new apiResponse(201, formattedResponse, "User role created successfully"));
-  } catch (error) {
-    console.error("Error creating user role:", error);
-    return res
-      .status(500)
-      .json(new apiError(500, "Error creating user role", error.message));
-  }
-};
 
 /* ============================================================
    ✅ GET ALL USER ROLES
@@ -209,68 +196,57 @@ export const getUserRoleById = async (req, res) => {
  * Keeps permissions intact unless explicitly changed.
  * Logs who modified the role and when.
  */
-export const updateUserRole = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { roleName, description, isActive } = req.body;
-    const modifiedBy = req.user?._id || "System"; // get from JWT middleware
+export const updateUserRole = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { roleName, description, permissions, isActive } = req.body;
 
-    if (!id) {
-      return res.status(400).json(new apiError(400, "Role ID is required"));
-    }
+  const role = await UserRole.findById(id);
+  if (!role) throw new apiError(404, "Role not found");
 
-    // 🧩 Fetch the role first
-    const existingRole = await UserRole.findById(id);
-    if (!existingRole) {
-      return res.status(404).json(new apiError(404, "Role not found"));
-    }
-
-    // 🚫 Duplicate roleName check
-    if (roleName && roleName.trim().toLowerCase() !== existingRole.roleName) {
-      const duplicateRole = await UserRole.findOne({
-        roleName: roleName.trim().toLowerCase(),
-        _id: { $ne: id },
-      });
-      if (duplicateRole) {
-        return res
-          .status(400)
-          .json(new apiError(400, "Role name already exists. Choose another name."));
-      }
-      existingRole.roleName = roleName.trim().toLowerCase();
-    }
-
-    // ✅ Update allowed fields
-    if (description) existingRole.description = description.trim();
-    if (typeof isActive === "boolean") existingRole.isActive = isActive;
-
-    // 🕓 Audit fields
-    existingRole.lastModifiedBy = modifiedBy;
-    existingRole.lastModifiedAt = new Date();
-
-    const updatedRole = await existingRole.save();
-
-    // 🧹 Clean Response Format
-    const formattedRole = {
-      _id: updatedRole._id,
-      roleName: updatedRole.roleName,
-      description: updatedRole.description,
-      isActive: updatedRole.isActive,
-      totalPermissions: updatedRole.permissions?.length || 0,
-      lastModifiedBy: modifiedBy,
-      lastModifiedAt: updatedRole.lastModifiedAt,
-      updatedAt: updatedRole.updatedAt,
-    };
-
-    return res
-      .status(200)
-      .json(new apiResponse(200, formattedRole, "Role updated successfully"));
-  } catch (error) {
-    console.error("Error updating role:", error);
-    return res
-      .status(500)
-      .json(new apiError(500, "Error updating user role", error.message));
+  // ✅ Prevent duplicate names (if changed)
+  if (roleName && roleName.trim() !== role.roleName) {
+    const existing = await UserRole.findOne({ roleName: roleName.trim(), _id: { $ne: id } });
+    if (existing) throw new apiError(409, "Role name already exists");
   }
-};
+
+  // ✅ Normalize permissions (same logic as create)
+  let normalizedPermissions = role.permissions;
+  if (permissions && Array.isArray(permissions)) {
+    normalizedPermissions = permissions.map((p) => {
+      if (typeof p === "string") {
+        return { action: p, granted: true };
+      } else if (p?.action) {
+        return {
+          action: p.action.trim(),
+          granted: p.granted ?? true,
+          modifiedBy: req.user?._id || null,
+          modifiedAt: new Date(),
+        };
+      } else if (typeof p === "object" && Object.keys(p).some((k) => k.match(/^\d+$/))) {
+        return {
+          action: Object.values(p).join(""),
+          granted: true,
+          modifiedBy: req.user?._id || null,
+          modifiedAt: new Date(),
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  }
+
+  // ✅ Update fields
+  role.roleName = roleName?.trim() || role.roleName;
+  role.description = description ?? role.description;
+  role.permissions = normalizedPermissions;
+  role.isActive = typeof isActive === "boolean" ? isActive : role.isActive;
+
+  await role.save();
+
+  return res
+    .status(200)
+    .json(new apiResponse(200, role, "Role updated successfully"));
+});
+
 
 
 /* ============================================================

@@ -1,4 +1,5 @@
 // controllers/user.controller.js
+// import bcrypt from "bcrypt";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { apiError } from "../utils/apiError.js";
 import { apiResponse } from "../utils/apiResponse.js";
@@ -6,36 +7,44 @@ import { User } from "../models/user.model.js";
 import { UserLogin } from "../models/userLogin.model.js";
 
 /* ============================================================
-   🟢 REGISTER USER (with optional login account)
+   🟢 REGISTER USER (auto link UserLogin if canLogin = true)
 ============================================================ */
-const registerUser = asyncHandler(async (req, res) => {
+
+export const registerUser = asyncHandler(async (req, res) => {
   const {
     userId,
     fullName,
-    role,
-    canLogin,
     username,
     password,
+    canLogin,
     phoneNo,
     email,
+    role,
+    branch,
     department,
     designation,
     isActive,
     remarks,
-    branch,
   } = req.body;
 
   const loginAllowed = canLogin === true || canLogin === "true";
 
   if (!userId?.trim()) throw new apiError(400, "User ID is required");
   if (!fullName?.trim()) throw new apiError(400, "Full Name is required");
+  if (!role) throw new apiError(400, "Role is required");
+  if (!branch) throw new apiError(400, "Branch is required");
 
-  if (email && await User.findOne({ email })) throw new apiError(409, "Email already exists");
-  if (phoneNo && await User.findOne({ phoneNo })) throw new apiError(409, "Phone number already exists");
+  // ✅ Prevent duplicates
+  if (email && await User.findOne({ email, isDeleted: { $ne: true } }))
+    throw new apiError(409, "Email already exists");
+  if (phoneNo && await User.findOne({ phoneNo, isDeleted: { $ne: true } }))
+    throw new apiError(409, "Phone number already exists");
 
+  // ✅ Create User
   const user = await User.create({
     userId,
     fullName,
+    username: username?.toLowerCase(),
     role,
     branch,
     canLogin: loginAllowed,
@@ -45,14 +54,16 @@ const registerUser = asyncHandler(async (req, res) => {
     designation,
     isActive,
     remarks,
+    createdBy: req.user?._id || null,
   });
 
+  // ✅ Create login if allowed
   if (loginAllowed) {
-    if (!username?.trim()) throw new apiError(400, "Username required");
-    if (!password?.trim()) throw new apiError(400, "Password required");
+    if (!username?.trim()) throw new apiError(400, "Username is required");
+    if (!password?.trim()) throw new apiError(400, "Password is required");
 
-    if (await UserLogin.findOne({ username: username.toLowerCase() }))
-      throw new apiError(409, "Username already exists");
+    const existingLogin = await UserLogin.findOne({ username: username.toLowerCase() });
+    if (existingLogin) throw new apiError(409, "Username already exists");
 
     await UserLogin.create({
       user: user._id,
@@ -61,15 +72,41 @@ const registerUser = asyncHandler(async (req, res) => {
     });
   }
 
-  const createdUser = await User.findById(user._id);
-  return res.status(201).json(new apiResponse(201, createdUser, "User registered successfully"));
+  // ✅ Populate clean role & branch
+  const createdUser = await User.findById(user._id)
+    .populate("role", "roleName permissions")
+    .populate("branch", "name");
+
+  // ✅ Normalize permissions (auto-fix)
+  if (createdUser.role?.permissions?.length) {
+    createdUser.role.permissions = createdUser.role.permissions.map((perm) => {
+      if (typeof perm === "string") {
+        // Fix old-style string permissions
+        return { action: perm, granted: true };
+      } else if (perm.action) {
+        // Already in correct format
+        return {
+          action: perm.action,
+          granted: perm.granted ?? true,
+          modifiedAt: perm.modifiedAt,
+        };
+      }
+      return perm;
+    });
+  }
+
+  return res
+    .status(201)
+    .json(new apiResponse(201, createdUser, "User registered successfully"));
 });
 
+
+
 /* ============================================================
-   🔍 GET ALL USERS
+   🔍 GET ALL USERS (with pagination + total)
 ============================================================ */
-const getAllUsers = asyncHandler(async (req, res) => {
-  const { isActive, role, branch, search } = req.query;
+export const getAllUsers = asyncHandler(async (req, res) => {
+  const { isActive, role, branch, search, page = 1, limit = 20 } = req.query;
 
   const filter = { isDeleted: { $ne: true } };
   if (isActive !== undefined) filter.isActive = isActive === "true";
@@ -79,121 +116,114 @@ const getAllUsers = asyncHandler(async (req, res) => {
     filter.$or = [
       { fullName: { $regex: search, $options: "i" } },
       { email: { $regex: search, $options: "i" } },
+      { username: { $regex: search, $options: "i" } },
+      { phoneNo: { $regex: search, $options: "i" } },
     ];
 
-  const users = await User.find(filter).sort({ createdAt: -1 });
-  return res.status(200).json(new apiResponse(200, users, "Users fetched successfully"));
+  const skip = (Number(page) - 1) * Number(limit);
+
+  const [users, total] = await Promise.all([
+    User.find(filter)
+      .populate("role", "roleName")
+      .populate("branch", "name")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit)),
+    User.countDocuments(filter),
+  ]);
+
+  return res.status(200).json(
+    new apiResponse(200, { users, total, page: Number(page), limit: Number(limit) }, "Users fetched successfully")
+  );
 });
 
 /* ============================================================
-   👁️ GET SINGLE USER
+   👁️ GET SINGLE USER (with populated details)
 ============================================================ */
-const getUserById = asyncHandler(async (req, res) => {
+export const getUserById = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const user = await User.findOne({ _id: id, isDeleted: { $ne: true } });
+
+  const user = await User.findOne({ _id: id, isDeleted: { $ne: true } })
+    .populate("role", "roleName permissions")
+    .populate("branch", "name");
+
   if (!user) throw new apiError(404, "User not found");
   return res.status(200).json(new apiResponse(200, user, "User fetched successfully"));
 });
 
 /* ============================================================
-   ✏️ UPDATE USER (sync login details if needed)
+   ✏️ UPDATE USER (sync login + user data)
 ============================================================ */
-
-const updateUser = asyncHandler(async (req, res) => {
+export const updateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const {
+    fullName,
+    email,
+    phoneNo,
+    department,
+    designation,
+    branch,
+    remarks,
+    role,
+    canLogin,
+    username,
+    password,
+  } = req.body;
 
-  const allowedFields = [
-    "fullName",
-    "role",
-    "email",
-    "phoneNo",
-    "department",
-    "designation",
-    "branch",
-    "remarks",
-    "canLogin",
-    "username",
-    "password",
-  ];
+  const user = await User.findOne({ _id: id, isDeleted: { $ne: true } });
+  if (!user) throw new apiError(404, "User not found");
 
-  // ✅ Pick only allowed fields
-  const updates = {};
-  allowedFields.forEach((field) => {
-    if (req.body[field] !== undefined) updates[field] = req.body[field];
-  });
+  // ✅ Update base info
+  if (fullName) user.fullName = fullName;
+  if (email) user.email = email;
+  if (phoneNo) user.phoneNo = phoneNo;
+  if (department) user.department = department;
+  if (designation) user.designation = designation;
+  if (branch) user.branch = branch;
+  if (remarks) user.remarks = remarks;
+  if (role) user.role = role;
 
-  // ✅ Find user
-  const existingUser = await User.findOne({ _id: id, isDeleted: { $ne: true } });
-  if (!existingUser) throw new apiError(404, "User not found");
+  // ✅ Handle login logic
+  const loginDoc = await UserLogin.findOne({ user: user._id });
 
-  // ✅ Track if canLogin is being changed
-  const canLoginModified = Object.prototype.hasOwnProperty.call(updates, "canLogin");
+  if (canLogin === true || canLogin === "true") {
+    user.canLogin = true;
 
-  // 🧩 If canLogin is being modified → enforce username/password rules
-  if (canLoginModified) {
-    const newCanLogin =
-      updates.canLogin === true || updates.canLogin === "true";
+    if (!username) throw new apiError(400, "Username required for login-enabled users");
+    if (!password && !loginDoc) throw new apiError(400, "Password required for first-time login setup");
 
-    if (newCanLogin) {
-      const usernameInDB = existingUser.username;
-      const passwordInDB = existingUser.password;
-
-      const usernameToUse = updates.username ?? usernameInDB;
-      const passwordToUse = updates.password ?? passwordInDB;
-
-      if (!usernameToUse)
-        throw new apiError(400, "Username is required when enabling login");
-      if (!passwordToUse)
-        throw new apiError(400, "Password is required when enabling login");
-
-      // ✅ Check duplicate username if changed
-      if (
-        usernameToUse &&
-        usernameToUse.toLowerCase() !== usernameInDB?.toLowerCase()
-      ) {
-        const duplicateUser = await User.findOne({
-          username: usernameToUse.toLowerCase(),
-          _id: { $ne: id },
-        });
-        if (duplicateUser) throw new apiError(409, "Username already exists");
-      }
-
-      updates.username = usernameToUse.toLowerCase();
-      updates.canLogin = true;
-
-      // ✅ Hash password if provided and changed
-      if (updates.password && updates.password !== passwordInDB) {
-        const salt = await bcrypt.genSalt(10);
-        updates.password = await bcrypt.hash(updates.password, salt);
-      }
+    if (loginDoc) {
+      // Update existing login
+      loginDoc.username = username.toLowerCase();
+      if (password) loginDoc.password = password;
+      await loginDoc.save();
     } else {
-      // 🚫 If disabling login → clear credentials
-      updates.username = undefined;
-      updates.password = undefined;
-      updates.canLogin = false;
+      // Create new login
+      await UserLogin.create({
+        user: user._id,
+        username: username.toLowerCase(),
+        password,
+      });
     }
   } else {
-    // 🚫 If canLogin not modified → don’t touch username/password
-    delete updates.username;
-    delete updates.password;
+    user.canLogin = false;
+    if (loginDoc) await UserLogin.deleteOne({ user: user._id });
   }
 
-  // ✅ Update user
-  const updatedUser = await User.findByIdAndUpdate(id, updates, {
-    new: true,
-  }).select("-password -refreshToken");
+  user.updatedBy = req.user?._id || null;
+  await user.save();
 
-  if (!updatedUser) throw new apiError(404, "User not found or update failed");
+  const updatedUser = await User.findById(user._id)
+    .populate("role", "roleName")
+    .populate("branch", "name");
 
-  return res
-    .status(200)
-    .json(new apiResponse(200, updatedUser, "User updated successfully"));
+  return res.status(200).json(new apiResponse(200, updatedUser, "User updated successfully"));
 });
 
 /* ============================================================
    🚫 ENABLE / DISABLE USER
 ============================================================ */
-const toggleUserStatus = asyncHandler(async (req, res) => {
+export const toggleUserStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const user = await User.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!user) throw new apiError(404, "User not found");
@@ -202,36 +232,42 @@ const toggleUserStatus = asyncHandler(async (req, res) => {
   await user.save();
 
   return res.status(200).json(
-    new apiResponse(200, { id: user._id, isActive: user.isActive },
-      `User ${user.isActive ? "activated" : "disabled"} successfully`)
+    new apiResponse(200, { id: user._id, isActive: user.isActive }, `User ${user.isActive ? "activated" : "disabled"} successfully`)
   );
 });
 
 /* ============================================================
    ❌ SOFT DELETE USER
 ============================================================ */
-const deleteUser = asyncHandler(async (req, res) => {
+export const deleteUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const deleter = req.user?._id || null;
 
   const user = await User.findOne({ _id: id, isDeleted: { $ne: true } });
   if (!user) throw new apiError(404, "User not found");
 
   user.isDeleted = true;
   user.deletedAt = new Date();
-  user.deletedBy = deleter;
+  user.deletedBy = req.user?._id || null;
   await user.save();
 
-  await UserLogin.deleteOne({ user: user._id }); // also remove login credentials
+  await UserLogin.deleteOne({ user: user._id });
 
   return res.status(200).json(new apiResponse(200, { id: user._id }, "User soft-deleted successfully"));
 });
 
-export {
-  registerUser,
-  getAllUsers,
-  getUserById,
-  updateUser,
-  toggleUserStatus,
-  deleteUser,
-};
+/* ============================================================
+   ♻️ RESTORE USER (undo soft-delete)
+============================================================ */
+export const restoreUser = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const user = await User.findOne({ _id: id, isDeleted: true });
+  if (!user) throw new apiError(404, "Deleted user not found");
+
+  user.isDeleted = false;
+  user.deletedAt = null;
+  user.deletedBy = null;
+  await user.save();
+
+  return res.status(200).json(new apiResponse(200, user, "User restored successfully"));
+});

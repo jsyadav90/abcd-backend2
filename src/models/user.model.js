@@ -36,12 +36,14 @@ const userSchema = new Schema(
       match: [/^[0-9+\-()\s]*$/, "Invalid phone number format"],
     },
     role: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "UserRole",
       required: true,
       default: "user",
     },
     branch: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Branch" ,
       required: true,
     },
     department: {

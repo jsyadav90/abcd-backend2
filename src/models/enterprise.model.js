@@ -1,10 +1,10 @@
 import mongoose, { Schema } from "mongoose";
 
-const groupSchema = new Schema(
+const enterpriseSchema = new Schema(
   {
-    groupName: {
+    enterpriseName: {
       type: String,
-      required: [true, "Group name is required"],
+      required: [true, "enterprise name is required"],
       unique: true,
       trim: true,
       uppercase: true,
@@ -39,4 +39,4 @@ const groupSchema = new Schema(
   }
 );
 
-export const Group = mongoose.model("Group", groupSchema);
+export const Enterprise = mongoose.model("Enterprise", enterpriseSchema);
