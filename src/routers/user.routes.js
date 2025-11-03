@@ -13,6 +13,11 @@ import {
   assignBranchesToUser,
   removeAssignedBranchesFromUser,
 } from "../controllers/assignBranch.controller.js";
+import {
+  assignReportingAuthority,
+  getReportingChainUp,
+  getSubordinates,
+} from "../controllers/reporting.controller.js";
 
  import { assignReportingTo } from "../controllers/assignReporting.controller.js";
 import {upload} from "../middlewares/multer.middleware.js"
@@ -31,5 +36,10 @@ router.route("/assign-branch").post(upload.none(),assignBranchesToUser)
 router.route("/remove-branch").post(upload.none(),removeAssignedBranchesFromUser)
 router.route("/assign-reporting").post(assignReportingTo)
 router.route("/branch/:branchId").get(upload.none(),authenticateJWT, getUsersByBranch)
+
+// require auth; optionally add role/permission middleware
+router.route("/:id/reporting").post( upload.none(), authenticateJWT, assignReportingAuthority);
+router.route(":id/reporting/up").get( upload.none(), authenticateJWT, getReportingChainUp);
+router.route(":id/subordinates").get( upload.none(), authenticateJWT, getSubordinates);
 
 export default router;
