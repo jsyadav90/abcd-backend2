@@ -11,19 +11,18 @@ import {
 /**
  * Assign / clear reportingTo
  */
+import { UserRole } from "../models/userRole.model.js";
+
 export const assignReportingAuthority = asyncHandler(async (req, res) => {
   const { id } = req.params; // user to update
   const { reportingToId } = req.body;
   const loggedInUser = req.user; // from auth middleware
 
-  // permission gate (customize inside helper)
-  ensureCanAssignReporting(loggedInUser);
-
-  // find target user
-  const user = await User.findById(id);
+  // 🔹 Step 1: Find target user
+  const user = await User.findById(id).populate("role", "roleName roleLevel branch");
   if (!user) throw new apiError(404, "Target user not found");
 
-  // clear reporting
+  // 🔹 Step 2: Clear reporting
   if (!reportingToId) {
     user.reportingTo = null;
     user.updatedBy = loggedInUser?._id || null;
@@ -39,45 +38,51 @@ export const assignReportingAuthority = asyncHandler(async (req, res) => {
     });
   }
 
-  // find reporting user and populate role & branch for response & checks
+  // 🔹 Step 3: Find reporting authority user
   const reportingUser = await User.findById(reportingToId).populate([
-    { path: "role", select: "roleName" },
+    { path: "role", select: "roleName roleLevel" },
     { path: "branch", select: "branchName" },
   ]);
   if (!reportingUser) throw new apiError(404, "Reporting authority user not found");
 
-  // prevent self-assign
+  // ❌ Prevent self-reporting
   if (user._id.equals(reportingUser._id)) throw new apiError(400, "User cannot report to themselves");
 
-  // prevent circular
+  // ❌ Prevent circular reporting
   if (await willCreateCircularReporting(user._id, reportingUser._id))
     throw new apiError(400, "Circular reporting would be created");
 
-  // Branch logic: allow if same branch OR reportingUser.assignedBranches includes user's branch
+  // 🔹 Step 4: Role hierarchy check
+  if (reportingUser.role?.roleLevel >= user.role?.roleLevel) {
+    throw new apiError(400, "Reporting authority must be senior (lower roleLevel number)");
+  }
+
+  // 🔹 Step 5: Branch check — optional (if required)
   const userBranchId = user.branch?.toString();
   const reportingUserBranchId = reportingUser.branch?._id?.toString() || reportingUser.branch?.toString();
-  const reportingUserAssignedBranches = (reportingUser.assignedBranches || []).map(b => b.toString());
 
+  const reportingUserAssignedBranches = (reportingUser.assignedBranches || []).map(b => b.toString());
   const isSameBranch = userBranchId && reportingUserBranchId && userBranchId === reportingUserBranchId;
   const isInAssignedBranches = userBranchId && reportingUserAssignedBranches.includes(userBranchId);
 
-  if (!isSameBranch && !isInAssignedBranches) {
-    throw new apiError(400, "Reporting authority must be in the same branch or assigned to this user's branch");
+  if (!isSameBranch && !isInAssignedBranches && reportingUser.role?.roleLevel > 10) {
+    throw new apiError(400, "Reporting authority must be in same branch or assigned to this branch");
   }
 
-  // assign and save
+  // 🔹 Step 6: Assign reporting
   user.reportingTo = reportingUser._id;
   user.updatedBy = loggedInUser?._id || null;
   await user.save();
 
-  // response format as requested
+  // 🔹 Step 7: Response
   const responseData = {
     _id: user._id,
     fullName: user.fullName,
     reportingTo: {
+      _id: reportingUser._id,
       fullName: reportingUser.fullName,
       role: reportingUser.role?.roleName || null,
-      branch: reportingUser.branch?.branchName || reportingUser.branch?.toString() || null,
+      branch: reportingUser.branch?.branchName || null,
     },
   };
 
@@ -87,6 +92,7 @@ export const assignReportingAuthority = asyncHandler(async (req, res) => {
     data: responseData,
   });
 });
+
 
 /**
  * Get upward chain (who this user reports to, recursively up to top)
@@ -119,13 +125,14 @@ export const getReportingChainUp = asyncHandler(async (req, res) => {
 export const getSubordinates = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // use raw mongoose.Types for aggregation id conversion
-  const oid = mongoose.Types.ObjectId(id);
+  // ✅ Correct way to create ObjectId
+  const oid = new mongoose.Types.ObjectId(id);
+
   const result = await User.aggregate([
     { $match: { _id: oid } },
     {
       $graphLookup: {
-        from: "users",           // adjust if your collection name differs
+        from: "users",           // collection name (matches your model name in lowercase plural)
         startWith: "$_id",
         connectFromField: "_id",
         connectToField: "reportingTo",
@@ -142,12 +149,124 @@ export const getSubordinates = asyncHandler(async (req, res) => {
           fullName: 1,
           role: 1,
           branch: 1,
-          level: 1
+          level: 1,
         },
       },
     },
   ]);
 
   if (!result || result.length === 0) throw new apiError(404, "User not found");
-  res.status(200).json({ success: true, data: result[0] });
+
+  res.status(200).json({
+    success: true,
+    message: "Subordinates fetched successfully",
+    data: result[0],
+  });
+});
+
+
+//! remove Reporting Authority
+export const removeReportingAuthority = asyncHandler(async (req, res) => {
+  const { id } = req.params; // user whose reporting needs to be cleared
+  const loggedInUser = req.user; // from auth middleware
+
+  // 1️⃣ Find target user
+  const user = await User.findById(id)
+    .populate([
+      { path: "reportingTo", select: "fullName role branch" },
+      { path: "role", select: "roleName roleLevel" },
+    ]);
+
+  if (!user) throw new apiError(404, "User not found");
+
+  // 2️⃣ If already no reporting assigned
+  if (!user.reportingTo) {
+    return res.status(200).json({
+      success: true,
+      message: "No reporting authority to remove",
+      data: {
+        _id: user._id,
+        fullName: user.fullName,
+        reportingTo: null,
+      },
+    });
+  }
+
+  // 3️⃣ Optional — check permission
+  // Example: only Admin or higher can remove
+  if (loggedInUser.role?.roleLevel > 20) {
+    throw new apiError(403, "Unauthorized: insufficient permission to remove reporting authority");
+  }
+
+  // 4️⃣ Clear reporting fields
+  const oldReportingUser = user.reportingTo;
+  user.reportingTo = null;
+  user.updatedBy = loggedInUser?._id || null;
+  await user.save();
+
+  // 5️⃣ Response
+  return res.status(200).json({
+    success: true,
+    message: `Reporting authority removed successfully. Previously reported to ${oldReportingUser?.fullName || "N/A"}`,
+    data: {
+      _id: user._id,
+      fullName: user.fullName,
+      reportingTo: null,
+    },
+  });
+});
+
+
+
+
+//! Recursive helper to build hierarchy
+async function buildHierarchy(userId) {
+  // Find the user
+  const user = await User.findById(userId)
+    .populate([
+      { path: "role", select: "roleName" },
+      { path: "branch", select: "branchName" },
+    ])
+    .lean();
+
+  if (!user) return null;
+
+  // Find all direct subordinates (those who report to this user)
+  const subordinates = await User.find({ reportingTo: user._id })
+    .populate([
+      { path: "role", select: "roleName" },
+      { path: "branch", select: "branchName" },
+    ])
+    .lean();
+
+  // Recursively build subordinates tree
+  const subordinateTrees = await Promise.all(
+    subordinates.map((sub) => buildHierarchy(sub._id))
+  );
+
+  return {
+    _id: user._id,
+    fullName: user.fullName,
+    role: user.role?.roleName || null,
+    branch: user.branch?.branchName || null,
+    subordinates: subordinateTrees.filter(Boolean),
+  };
+}
+
+// Controller
+export const getUserHierarchy = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // Validate ObjectId
+  if (!mongoose.Types.ObjectId.isValid(id))
+    throw new apiError(400, "Invalid user ID");
+
+  const hierarchy = await buildHierarchy(id);
+  if (!hierarchy) throw new apiError(404, "User not found");
+
+  res.status(200).json({
+    success: true,
+    message: "Hierarchy fetched successfully",
+    data: hierarchy,
+  });
 });

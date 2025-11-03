@@ -8,6 +8,7 @@ import { registerUser,
   deleteUser,
   restoreUser,
   getUsersByBranch,
+  
  } from "../controllers/user.controllers.js";
 import {
   assignBranchesToUser,
@@ -17,6 +18,8 @@ import {
   assignReportingAuthority,
   getReportingChainUp,
   getSubordinates,
+  removeReportingAuthority,
+  getUserHierarchy,
 } from "../controllers/reporting.controller.js";
 
  import { assignReportingTo } from "../controllers/assignReporting.controller.js";
@@ -39,7 +42,9 @@ router.route("/branch/:branchId").get(upload.none(),authenticateJWT, getUsersByB
 
 // require auth; optionally add role/permission middleware
 router.route("/:id/reporting").post( upload.none(), authenticateJWT, assignReportingAuthority);
-router.route(":id/reporting/up").get( upload.none(), authenticateJWT, getReportingChainUp);
-router.route(":id/subordinates").get( upload.none(), authenticateJWT, getSubordinates);
+router.route("/:id/reporting/up").get( authenticateJWT, getReportingChainUp);
+router.route("/:id/subordinates").get( upload.none(), authenticateJWT, getSubordinates);
+router.route("/reporting/:id").delete( upload.none(), authenticateJWT, removeReportingAuthority);
+router.route("/hierarchy/:id").get( upload.none(), authenticateJWT, getUserHierarchy);
 
 export default router;

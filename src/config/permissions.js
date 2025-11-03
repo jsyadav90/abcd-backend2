@@ -8,6 +8,7 @@ export const ALL_PERMISSIONS = [
   "remove_branch",
   "assign_role",
   "remove_role",
+  "give_reporting",
 
   // 🏢 Branch management
   "create_branch",

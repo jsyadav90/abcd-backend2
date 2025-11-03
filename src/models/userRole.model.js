@@ -45,6 +45,14 @@ const userRoleSchema = new mongoose.Schema(
       default: null,
     },
 
+    roleLevel: {
+      type: Number,
+      // required: true,
+      index: true, // for faster queries
+      comment:
+        "Smaller = more senior, e.g. 10=SuperAdmin, 20=Administrator, 30=BranchAdmin...",
+    },
+
     // ✅ Array of permission objects (dynamic add/remove with history)
     permissions: [permissionSchema],
 

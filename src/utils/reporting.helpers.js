@@ -5,15 +5,24 @@ import { apiError } from "../utils/apiError.js";
 /**
  * Check for circular reporting: returns true if setting user -> reportingToId would create a loop.
  */
-export async function willCreateCircularReporting(userId, reportingToId) {
-  // Traverse upward from reportingToId to see if we reach userId
-  let current = await User.findById(reportingToId).select("reportingTo");
-  while (current && current.reportingTo) {
-    if (current.reportingTo.toString() === userId.toString()) return true;
-    current = await User.findById(current.reportingTo).select("reportingTo");
+export const willCreateCircularReporting = async (userId, reportingToId) => {
+  const visited = new Set();
+  let current = reportingToId;
+
+  while (current) {
+    if (visited.has(current.toString())) return true;
+    visited.add(current.toString());
+
+    const nextUser = await User.findById(current).select("reportingTo");
+    if (!nextUser || !nextUser.reportingTo) break;
+
+    current = nextUser.reportingTo;
+    if (current.toString() === userId.toString()) return true;
   }
+
   return false;
-}
+};
+
 
 /**
  * Simple permission checker placeholder. Replace with your real permission logic.
