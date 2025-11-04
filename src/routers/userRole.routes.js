@@ -63,6 +63,8 @@ router
     // authenticateJWT, authorizePermission("update_role"), 
     upload.none(), updateUserRole);
 
+
+
 /* ============================================================
    🔵 Update role permissions (add/update)
 ============================================================ */

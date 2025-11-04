@@ -454,3 +454,13 @@ export const deleteUserRole = async (req, res) => {
       .json(new apiError(500, "Error deleting user role", error.message));
   }
 };
+
+
+
+// controllers/user.controller.js
+/**
+ * 🧩 Change a User's Role (Secure)
+ * - Validates that user and role exist
+ * - Ensures role is active
+ * - Logs who made the change
+ */

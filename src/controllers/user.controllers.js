@@ -654,3 +654,41 @@ export const getUsersByBranch = asyncHandler(async (req, res) => {
     new apiResponse(200, {total, users}, "Users fetched successfully for this branch")
   );
 });
+
+
+
+export const changeUserRole = asyncHandler(async (req, res) => {
+  const { userId, newRoleId } = req.body;
+
+  // ✅ 1. Validate input
+  if (!userId || !newRoleId) {
+    throw new apiError(400, "User ID and new Role ID are required");
+  }
+
+  // ✅ 2. Find user
+  const user = await User.findById(userId);
+  if (!user) throw new apiError(404, "User not found");
+
+  // ✅ 3. Find role and validate it's active
+  const newRole = await UserRole.findOne({ _id: newRoleId, isActive: true });
+  if (!newRole) throw new apiError(404, "Selected role does not exist or is inactive");
+
+  // 🚫 Optional: Prevent assigning restricted roles
+  if (newRole.roleName?.toLowerCase() === "super admin") {
+    throw new apiError(403, "Cannot assign 'Super Admin' role manually");
+  }
+
+  // ✅ 4. Update user’s role
+  user.role = newRole._id;
+  user.updatedBy = req.user?._id || null;
+  await user.save();
+
+  // ✅ 5. Populate for response
+  const updatedUser = await User.findById(userId)
+    .populate("role", "roleName description isActive")
+    .populate("updatedBy", "fullName username");
+
+  return res
+    .status(200)
+    .json(new apiResponse(200, updatedUser, "User role updated successfully"));
+});

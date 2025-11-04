@@ -21,11 +21,14 @@ import {
   removeReportingAuthority,
   getUserHierarchy,
 } from "../controllers/reporting.controller.js";
-
+import { changeUserRole } from "../controllers/user.controllers.js";
  import { assignReportingTo } from "../controllers/assignReporting.controller.js";
 import {upload} from "../middlewares/multer.middleware.js"
 
 const router = Router();
+
+// specific route first
+router.route("/change-role").put(upload.none(), authenticateJWT, changeUserRole)
 
 // Only logged-in admins or super admins can create users
 router.route("/register").post(upload.none(),authenticateJWT, registerUser)
